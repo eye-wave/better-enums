@@ -21,4 +21,4 @@ import type { Plugin } from "vite";
  * Enum members with initializers are explicitly unsupported and will throw
  * a build error.
  */
-export default function betterEnums(): Plugin;
+export function betterEnums(): Plugin;

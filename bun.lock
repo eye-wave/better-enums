@@ -5,9 +5,11 @@
     "": {
       "name": "better-enums",
       "dependencies": {
-        "@typescript-eslint/typescript-estree": "^8.60.0",
-        "typescript": "^6.0.3",
-        "vite": "^8.0.14",
+        "@typescript-eslint/typescript-estree": "^8",
+      },
+      "peerDependencies": {
+        "typescript": "^6",
+        "vite": "^8",
       },
     },
   },
