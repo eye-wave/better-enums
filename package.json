@@ -4,6 +4,7 @@
   "description": "vite plugin that rewrites ts enums into tree-shakeable named const exports",
   "type": "module",
   "main": "better-enums.js",
+  "module": "better-enums.js",
   "exports": {
     ".": {
       "import": "./better-enums.js",
