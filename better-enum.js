@@ -39,7 +39,7 @@ function extractEnums(source, filePath) {
           `[vite-plugin-better-enums] Enum initializers are not supported.\n` +
             `  Found initializer on member "${member.id.name ?? member.id.value}" ` +
             `in enum "${name}" at ${filePath}.\n` +
-            `  Remove the initializer or exclude this file from the plugin.`
+            `  Remove the initializer or exclude this file from the plugin.`,
         );
       }
 
@@ -74,19 +74,14 @@ function buildShim(source, enums, filePath) {
   for (const { name, members } of enums) {
     const virtualId = buildVirtualId(filePath, name);
 
-    // replace the enum declaration (including its `export`) with shim lines
-    // we match lazily so multiple enums in one file don't bleed together
     const enumPattern = new RegExp(
       `export\\s+(?:const\\s+)?enum\\s+${name}\\s*\\{[^}]*\\}`,
-      "s"
+      "s",
     );
 
-    const values = members.map((_, i) => i + 1);
-    const unionType = values.join(" | ");
-
     const shim =
-      `export * as ${name} from ${JSON.stringify(virtualId)};\n` +
-      `export type ${name} = ${unionType};`;
+      `import * as ${name} from ${JSON.stringify(virtualId)};\n` +
+      `export { ${name} };\n`;
 
     result = result.replace(enumPattern, shim);
   }
@@ -141,14 +136,14 @@ export function betterEnums() {
       const enums = enumCache.get(filePath);
       if (!enums) {
         throw new Error(
-          `[vite-plugin-better-enums] Virtual module requested before source was transformed: ${id}`
+          `[vite-plugin-better-enums] Virtual module requested before source was transformed: ${id}`,
         );
       }
 
       const enumDef = enums.find((e) => e.name === enumName);
       if (!enumDef) {
         throw new Error(
-          `[vite-plugin-better-enums] Unknown enum "${enumName}" in ${filePath}`
+          `[vite-plugin-better-enums] Unknown enum "${enumName}" in ${filePath}`,
         );
       }
 
@@ -169,7 +164,6 @@ export function betterEnums() {
       try {
         enums = extractEnums(source, id);
       } catch (err) {
-
         // surface initializer errors as build errors
         this.error(err.message);
         return;
