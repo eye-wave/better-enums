@@ -1,0 +1,11 @@
+{
+  "name": "@vite-plugin-better-enums/test",
+  "private": true,
+  "scripts": {
+    "build": "vite build"
+  },
+  "dependencies": {
+    "vite": "^8.1.0",
+    "vite-plugin-better-enums": "file:.."
+  }
+}

@@ -1,180 +1,150 @@
-import { parse } from "@typescript-eslint/typescript-estree";
+import * as oxc from "oxc-parser";
+import path from "node:path";
 
-const VIRTUAL_PREFIX = "\0enum:";
+const VIRTUAL_PREFIX = "\0enum-virtual:";
 
-/**
- * @param {string} source
- * @param {string} filePath  - absolute path, used only for error messages
- * @returns {{ name: string, members: string[] }[]}
- */
-function extractEnums(source, filePath) {
-  let ast;
-  try {
-    ast = parse(source, {
-      jsx: filePath.endsWith("x"), // .tsx / .jsx
-      range: false,
-      loc: false,
-    });
-  } catch (err) {
-    return [];
-  }
+function resolveMembers(enumNode) {
+  const members = enumNode.body.members;
+  const resolved = [];
+  const byName = {};
+  let counter = 1;
 
-  const enums = [];
+  for (const member of members) {
+    const name =
+      member.id.type === "Identifier" ? member.id.name : member.id.value;
 
-  for (const node of ast.body) {
-    if (
-      node.type !== "ExportNamedDeclaration" ||
-      node.declaration?.type !== "TSEnumDeclaration"
-    ) {
-      continue;
+    let value;
+    if (!member.initializer) {
+      value = counter++;
+    } else {
+      value = evalInitializer(member.initializer, byName);
+      if (typeof value === "number") counter = value + 1;
+      else counter = NaN;
     }
 
-    const decl = node.declaration;
-    const name = decl.id.name;
-    const members = [];
-
-    for (const member of decl.body.members) {
-      if (member.initializer !== undefined) {
-        throw new Error(
-          `[vite-plugin-better-enums] Enum initializers are not supported.\n` +
-            `  Found initializer on member "${member.id.name ?? member.id.value}" ` +
-            `in enum "${name}" at ${filePath}.\n` +
-            `  Remove the initializer or exclude this file from the plugin.`,
-        );
-      }
-
-      const memberName =
-        member.id.type === "Identifier" ? member.id.name : member.id.value;
-
-      members.push(memberName);
-    }
-
-    enums.push({ name, members });
+    byName[name] = value;
+    resolved.push({ name, value });
   }
 
-  return enums;
+  return resolved;
 }
 
-/**
- * builds replacement source for the original file.
- * every `export enum Foo { ... }` becomes:
- *   export * as Foo from "<virtual>";
- *   export type Foo = 1 | 2 | 3 ...;
- *
- * all other content in the file is preserved unchanged
- *
- * @param {string} source
- * @param {{ name: string, members: string[] }[]} enums
- * @param {string} filePath
- * @returns {string}
- */
-function buildShim(source, enums, filePath) {
-  let result = source;
+function evalInitializer(node, byName) {
+  if (node.type === "Literal") return node.value;
 
-  for (const { name, members } of enums) {
-    const virtualId = buildVirtualId(filePath, name);
-
-    const enumPattern = new RegExp(
-      `export\\s+(?:const\\s+)?enum\\s+${name}\\s*\\{[^}]*\\}`,
-      "s",
-    );
-
-    const shim =
-      `import * as ${name} from ${JSON.stringify(virtualId)};\n` +
-      `export { ${name} };\n`;
-
-    result = result.replace(enumPattern, shim);
+  if (
+    node.type === "UnaryExpression" &&
+    node.operator === "-" &&
+    node.argument?.type === "Literal" &&
+    typeof node.argument.value === "number"
+  ) {
+    return -node.argument.value;
   }
 
-  return result;
+  if (node.type === "Identifier" && node.name in byName) {
+    return byName[node.name];
+  }
+
+  return undefined;
 }
 
-/**
- * Builds the virtual module source: one `export const` per member, 1-indexed.
- *
- * @param {{ name: string, members: string[] }} enumDef
- * @returns {string}
- */
-function buildVirtualModule({ members }) {
+function emitVirtualModule(members) {
   return members
-    .map((member, i) => `export const ${member} = ${i + 1};`)
+    .map(({ name, value }) => {
+      if (value === undefined) return `export const ${name} = undefined;`;
+      if (typeof value === "string")
+        return `export const ${name} = ${JSON.stringify(value)};`;
+      return `export const ${name} = ${value};`;
+    })
     .join("\n");
 }
 
-function buildVirtualId(filePath, enumName) {
-  return `${VIRTUAL_PREFIX}${filePath}?${enumName}`;
-}
-
-/** @returns {import('vite').Plugin} */
 export function betterEnums() {
-  const enumCache = new Map();
+  const virtualModules = new Map();
 
   return {
-    name: "better-enums",
+    name: "vite-plugin-better-enums",
+
     enforce: "pre",
 
     resolveId(id) {
-      if (id.startsWith(VIRTUAL_PREFIX)) {
-        return id;
-      }
-
-      // when the shim we emit does  import("...\0enum:...") vite will call
-      // resolveId with the raw string we put in the import specifier
-      // re-return it so vite knows it's virtual
-      if (id.startsWith("\0")) return id;
+      if (id.startsWith(VIRTUAL_PREFIX)) return id;
     },
 
     load(id) {
       if (!id.startsWith(VIRTUAL_PREFIX)) return;
-
-      // id = `\0enum:/abs/path/to/file.ts?EnumName`
-      const withoutPrefix = id.slice(VIRTUAL_PREFIX.length);
-      const qmark = withoutPrefix.lastIndexOf("?");
-      const filePath = withoutPrefix.slice(0, qmark);
-      const enumName = withoutPrefix.slice(qmark + 1);
-
-      const enums = enumCache.get(filePath);
-      if (!enums) {
-        throw new Error(
-          `[vite-plugin-better-enums] Virtual module requested before source was transformed: ${id}`,
-        );
-      }
-
-      const enumDef = enums.find((e) => e.name === enumName);
-      if (!enumDef) {
-        throw new Error(
-          `[vite-plugin-better-enums] Unknown enum "${enumName}" in ${filePath}`,
-        );
-      }
-
-      return buildVirtualModule(enumDef);
+      const src = virtualModules.get(id);
+      if (src != null) return { code: src, map: null };
     },
 
-    transform(source, id) {
-      // only handle ts and tsx files
+    transform(code, id) {
       if (!/\.[cm]?tsx?$/.test(id)) return;
+      if (!code.includes("enum ")) return;
 
-      // skip node_modules
-      if (id.includes("node_modules")) return;
+      const parsed = oxc.parseSync(path.basename(id), code, {
+        sourceType: "module",
+      });
 
-      // skip our own virtual modules
-      if (id.startsWith(VIRTUAL_PREFIX)) return;
+      if (parsed.errors?.some((e) => e.severity === "Error")) return;
 
-      let enums;
-      try {
-        enums = extractEnums(source, id);
-      } catch (err) {
-        // surface initializer errors as build errors
-        this.error(err.message);
-        return;
+      const replacements = [];
+      const reexports = [];
+
+      for (const node of parsed.program.body) {
+        let enumNode = null;
+        let isExported = false;
+        let nodeStart, nodeEnd;
+
+        if (node.type === "TSEnumDeclaration") {
+          enumNode = node;
+          nodeStart = node.start;
+          nodeEnd = node.end;
+        } else if (
+          node.type === "ExportNamedDeclaration" &&
+          node.declaration?.type === "TSEnumDeclaration"
+        ) {
+          enumNode = node.declaration;
+          isExported = true;
+          nodeStart = node.start;
+          nodeEnd = node.end;
+        }
+
+        if (!enumNode) continue;
+
+        const enumName = enumNode.id.name;
+        const members = resolveMembers(enumNode);
+        const vid = `${VIRTUAL_PREFIX}${id}::${enumName}`;
+
+        virtualModules.set(vid, emitVirtualModule(members));
+
+        const importLine = `import * as ${enumName} from ${JSON.stringify(vid)};`;
+        replacements.push({
+          start: nodeStart,
+          end: nodeEnd,
+          replacement: importLine,
+        });
+
+        if (isExported) {
+          reexports.push(`export { ${enumName} };`);
+        }
       }
 
-      if (enums.length === 0) return;
+      if (replacements.length === 0) return;
 
-      enumCache.set(id, enums);
+      replacements.sort((a, b) => b.start - a.start);
 
-      const code = buildShim(source, enums, id);
-      return { code, map: null };
+      let out = code;
+      for (const { start, end, replacement } of replacements) {
+        out = out.slice(0, start) + replacement + out.slice(end);
+      }
+
+      if (reexports.length) {
+        out += "\n" + reexports.join("\n") + "\n";
+      }
+
+      return { code: out, map: null };
     },
   };
 }
+
+export default betterEnums;

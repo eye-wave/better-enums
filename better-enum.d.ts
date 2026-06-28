@@ -22,3 +22,4 @@ import type { Plugin } from "vite";
  * a build error.
  */
 export function betterEnums(): Plugin;
+export default function betterEnums(): Plugin;

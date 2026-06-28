@@ -1,6 +1,6 @@
 {
   "name": "vite-plugin-better-enums",
-  "version": "1.1.0",
+  "version": "2.0.0",
   "description": "vite plugin that rewrites ts enums into tree-shakeable named const exports",
   "type": "module",
   "main": "better-enum.js",
@@ -19,10 +19,13 @@
   ],
   "license": "MIT",
   "dependencies": {
-    "@typescript-eslint/typescript-estree": "^8"
+    "oxc-parser": "^0.137.0"
   },
   "peerDependencies": {
     "typescript": "^6",
     "vite": "^8"
-  }
+  },
+  "workspaces": [
+    "test/"
+  ]
 }
